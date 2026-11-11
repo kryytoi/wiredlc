@@ -48,13 +48,15 @@ npm run dev
 - **Обычный пользователь (Month)**: `kairo@example.com` / `PlayerPass!2026`
 - **Бесплатный аккаунт (Free)**: `frost@example.com` / `PlayerPass!2026`
 
-## Переход на Supabase (Продакшен)
+## Переход на Supabase и деплой на Vercel (Продакшен)
 
-1. Создайте проект на Supabase и выполните SQL-миграцию из `supabase/schema.sql`.
-2. Реализуйте методы `src/lib/db/supabase.ts` поверх `@supabase/supabase-js`.
-3. Задайте в `.env`:
-   - `DB_PROVIDER="supabase"`
+На Vercel без переменных Supabase проект запускается в безопасном serverless-режиме (`/tmp` / in-memory fallback, без ошибок read-only ФС), но для постоянного хранения пользователей и заказов подключите **Supabase**:
+
+1. Создайте проект в Supabase и выполните SQL-миграцию из `supabase/schema.sql` в SQL Editor.
+2. В настройках проекта Vercel (Environment Variables) добавьте:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `AUTH_SECRET` (случайная строка ≥ 32 символов)
-4. При необходимости настройте `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI` и реальные платёжные вебхуки.
+   - `ADMIN_SEED_PASSWORD` (пароль для первичного сидинга `MrDarko`)
+3. `SupabaseAdapter` (`src/lib/db/supabase.ts`) активируется **автоматически** при наличии ключей Supabase (или при `DB_PROVIDER="supabase"`).
+4. При необходимости настройте `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`.

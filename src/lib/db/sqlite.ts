@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
-import bcrypt from 'bcryptjs';
 import type {
   OrderRecord,
   OrderStatus,
@@ -12,30 +12,67 @@ import type {
   UserRole,
 } from '../types';
 import type { CreateOrderInput, CreateUserInput, DatabaseAdapter } from './adapter';
+import { createSeedUsersAndOrders, getDefaultSiteSettings } from './defaults';
 
-// Используем createRequire для безопасного подключения встроенного node:sqlite в Next.js bundler
-const require = createRequire(import.meta.url);
 type SqliteModule = typeof import('node:sqlite');
 
 interface GlobalSqliteCache {
   __wiredlcSqliteDb?: InstanceType<SqliteModule['DatabaseSync']>;
   __wiredlcSqliteReady?: boolean;
+  __wiredlcSqliteAvailable?: boolean;
 }
 
 const globalCache = globalThis as unknown as GlobalSqliteCache;
 
-function getDbFilePath(): string {
-  const dataDir = path.join(process.cwd(), 'data');
+function loadSqliteModule(): SqliteModule | null {
+  try {
+    const req = createRequire(import.meta.url);
+    return req('node:sqlite') as SqliteModule;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWritableDbPath(): string {
+  // На Vercel/Serverless корень проекта /var/task открыт только для чтения, поэтому используем /tmp
+  const isServerless = Boolean(
+    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.READ_ONLY_FS,
+  );
+  const dataDir = isServerless ? os.tmpdir() : path.join(process.cwd(), 'data');
+
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
   return path.join(dataDir, 'wiredlc.db');
 }
 
+export function isSqliteSupported(): boolean {
+  if (typeof globalCache.__wiredlcSqliteAvailable === 'boolean') {
+    return globalCache.__wiredlcSqliteAvailable;
+  }
+  try {
+    const sqlite = loadSqliteModule();
+    if (!sqlite?.DatabaseSync) {
+      globalCache.__wiredlcSqliteAvailable = false;
+      return false;
+    }
+    // Проверяем, что можно создать/открыть БД в выбранной директории
+    getSqliteInstance();
+    globalCache.__wiredlcSqliteAvailable = true;
+    return true;
+  } catch {
+    globalCache.__wiredlcSqliteAvailable = false;
+    return false;
+  }
+}
+
 function getSqliteInstance() {
   if (!globalCache.__wiredlcSqliteDb) {
-    const { DatabaseSync } = require('node:sqlite') as SqliteModule;
-    const db = new DatabaseSync(getDbFilePath());
+    const sqlite = loadSqliteModule();
+    if (!sqlite?.DatabaseSync) {
+      throw new Error('node:sqlite недоступен в текущей версии Node.js');
+    }
+    const db = new sqlite.DatabaseSync(resolveWritableDbPath());
     db.exec('PRAGMA journal_mode = WAL;');
     db.exec('PRAGMA foreign_keys = ON;');
     globalCache.__wiredlcSqliteDb = db;
@@ -97,11 +134,9 @@ function initSchemaAndSeed(db: InstanceType<SqliteModule['DatabaseSync']>) {
     );
   `);
 
-  const now = new Date().toISOString();
-
-  // Сидим настройки лендинга по умолчанию, если их ещё нет
   const existingSettings = db.prepare('SELECT id FROM site_settings WHERE id = 1').get();
   if (!existingSettings) {
+    const defaults = getDefaultSiteSettings();
     db.prepare(`
       INSERT INTO site_settings (
         id, hero_badge, hero_title, hero_subtitle, minecraft_version, loader_name,
@@ -109,31 +144,23 @@ function initSchemaAndSeed(db: InstanceType<SqliteModule['DatabaseSync']>) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       1,
-      'Minecraft 1.21.11 · Fabric',
-      'Минимализм и контроль в каждом кадре.',
-      'Wire DLC — чистый модульный клиент для Minecraft 1.21.11 на базе Fabric. Адаптивные обходы актуальных античитов, плавный рендер и мгновенный отклик без перегруженного интерфейса.',
-      '1.21.11',
-      'Fabric',
-      'Бесплатная сборка (заглушка MVP): wiredlc-free-1.21.11-fabric.jar — базовые визуалы и оптимизация FPS.',
-      'Тариф 90 дней оценён в 200 мандаринов — уточните курс или формат передачи в комментарии к заявке.',
-      'https://t.me/wiredlc_support_placeholder',
-      'https://discord.gg/wiredlc-placeholder',
-      '/brand/wire-logo.png',
-      now,
+      defaults.heroBadge,
+      defaults.heroTitle,
+      defaults.heroSubtitle,
+      defaults.minecraftVersion,
+      defaults.loaderName,
+      defaults.freeDownloadNote,
+      defaults.mandarinNote,
+      defaults.supportTelegram,
+      defaults.supportDiscord,
+      defaults.logoUrl,
+      defaults.updatedAt,
     );
   }
 
-  // Сидим стартовых пользователей только если таблица пустая
   const userCountRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number };
   if (userCountRow.cnt === 0) {
-    const adminPassword = process.env.ADMIN_SEED_PASSWORD || 'MrDarkoAdmin!2026';
-    const adminHash = bcrypt.hashSync(adminPassword, 10);
-    const demoUserHash = bcrypt.hashSync('PlayerPass!2026', 10);
-
-    const adminId = crypto.randomUUID();
-    const player1Id = crypto.randomUUID();
-    const player2Id = crypto.randomUUID();
-    const player3Id = crypto.randomUUID();
+    const seed = createSeedUsersAndOrders();
 
     const insertUser = db.prepare(`
       INSERT INTO users (
@@ -143,70 +170,23 @@ function initSchemaAndSeed(db: InstanceType<SqliteModule['DatabaseSync']>) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    // Единственный администратор по ТЗ — MrDarko
-    insertUser.run(
-      adminId,
-      'MrDarko',
-      'mrdarko@wiredlc.dev',
-      adminHash,
-      'admin',
-      'lifetime',
-      null,
-      'WDLC-DARK-0001-ADMN',
-      0,
-      null,
-      'MrDarko#0001',
-      1,
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 30).toISOString(),
-    );
-
-    insertUser.run(
-      player1Id,
-      'kairo_pvp',
-      'kairo@example.com',
-      demoUserHash,
-      'user',
-      'month',
-      new Date(Date.now() + 1000 * 60 * 60 * 24 * 24).toISOString(),
-      'WDLC-8F2A-19C4-E01B',
-      1,
-      null,
-      'kairo_pvp',
-      1,
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 6).toISOString(),
-    );
-
-    insertUser.run(
-      player2Id,
-      'velvet_fabric',
-      'velvet@example.com',
-      demoUserHash,
-      'user',
-      'lifetime',
-      null,
-      'WDLC-3A77-B102-99FD',
-      0,
-      null,
-      null,
-      1,
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 14).toISOString(),
-    );
-
-    insertUser.run(
-      player3Id,
-      'frost_free',
-      'frost@example.com',
-      demoUserHash,
-      'user',
-      'free',
-      null,
-      null,
-      0,
-      null,
-      null,
-      0,
-      new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString(),
-    );
+    for (const u of seed.users) {
+      insertUser.run(
+        u.id,
+        u.username,
+        u.email,
+        u.passwordHash,
+        u.role,
+        u.subscriptionTier,
+        u.subscriptionExpiresAt,
+        u.hwid,
+        u.hwidResetsCount,
+        u.discordId,
+        u.discordUsername,
+        u.emailVerified ? 1 : 0,
+        u.createdAt,
+      );
+    }
 
     const insertOrder = db.prepare(`
       INSERT INTO orders (
@@ -215,57 +195,20 @@ function initSchemaAndSeed(db: InstanceType<SqliteModule['DatabaseSync']>) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    insertOrder.run(
-      crypto.randomUUID(),
-      player1Id,
-      'month',
-      'Подписка 30 дней (Month)',
-      150,
-      'RUB',
-      'sbp',
-      'paid',
-      'Оплата СБП подтверждена',
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 6).toISOString(),
-    );
-
-    insertOrder.run(
-      crypto.randomUUID(),
-      player1Id,
-      'hwid_reset',
-      'Сброс HWID',
-      170,
-      'RUB',
-      'rf_card',
-      'paid',
-      'Замена SSD / переустановка Windows',
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 2).toISOString(),
-    );
-
-    insertOrder.run(
-      crypto.randomUUID(),
-      player2Id,
-      'lifetime',
-      'Подписка Навсегда (Lifetime)',
-      500,
-      'RUB',
-      'usdt',
-      'paid',
-      'USDT TRC-20',
-      new Date(Date.now() - 1000 * 60 * 60 * 24 * 14).toISOString(),
-    );
-
-    insertOrder.run(
-      crypto.randomUUID(),
-      player3Id,
-      'quarter',
-      'Подписка 90 дней (3 Months)',
-      200,
-      'MANDARINS',
-      'mandarins',
-      'pending',
-      'Уточнение: передача 200 мандаринов через поддержку в Telegram',
-      new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString(),
-    );
+    for (const o of seed.orders) {
+      insertOrder.run(
+        o.id,
+        o.userId,
+        o.itemCode,
+        o.itemTitle,
+        o.amount,
+        o.currency,
+        o.paymentMethod,
+        o.status,
+        o.note,
+        o.createdAt,
+      );
+    }
   }
 }
 
