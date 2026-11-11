@@ -241,7 +241,7 @@ export function LandingClient({ user, settings }: LandingClientProps) {
           </div>
         </section>
 
-        {/* INTERACTIVE UI PREVIEW */}
+        {/* UI PREVIEW */}
         <section id="preview" className="border-y border-white/[0.06] bg-[#07070B]">
           <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
             <FadeUp>
@@ -251,11 +251,12 @@ export function LandingClient({ user, settings }: LandingClientProps) {
                     Визуал и интерфейс
                   </span>
                   <h2 className="mt-2 font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">
-                    Интерактивный прототип ClickGUI
+                    Wire DLC ClickGUI
                   </h2>
                 </div>
                 <p className="max-w-md text-sm text-[#9CA3AF]">
-                  Попробуйте переключение категорий и ползунки прямо на сайте до загрузки клиента.
+                  Актуальный вид внутриигрового меню для Minecraft {settings.minecraftVersion}{' '}
+                  {settings.loaderName} — чистая сетка модулей, поиск и быстрые настройки.
                 </p>
               </div>
             </FadeUp>
