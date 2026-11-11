@@ -10,7 +10,14 @@ export default async function HomePage() {
     db.getSiteSettings(),
   ]);
 
-  const userRecord = session ? await db.findUserById(session.sub) : null;
+  let userRecord = null;
+  if (session) {
+    try {
+      userRecord = await db.findUserById(session.sub);
+    } catch {
+      userRecord = null;
+    }
+  }
   const user = userRecord ? toPublicUser(userRecord) : null;
 
   return <LandingClient user={user} settings={settings} />;

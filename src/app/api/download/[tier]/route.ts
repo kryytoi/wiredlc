@@ -1,11 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
-import zlib from 'node:zlib';
 import { db } from '@/lib/db';
 import { getServerSession } from '@/lib/session';
 
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc = CRC32_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 /**
- * Минимальный генератор валидного ZIP/JAR архива без внешних зависимостей (store-метод).
- * Позволяет отдавать корректный .jar-плейсхолдер для Minecraft 1.21.11 Fabric.
+ * Минимальный генератор валидного ZIP/JAR архива без зависимостей от Node 22+ zlib.crc32.
+ * Корректно работает на Node 18/20/22+ и в Vercel Serverless.
  */
 function buildPlaceholderJar(entries: Array<{ name: string; content: string }>): Buffer {
   const localParts: Buffer[] = [];
@@ -15,7 +34,7 @@ function buildPlaceholderJar(entries: Array<{ name: string; content: string }>):
   for (const entry of entries) {
     const nameBuf = Buffer.from(entry.name, 'utf8');
     const dataBuf = Buffer.from(entry.content, 'utf8');
-    const crc = zlib.crc32(dataBuf) >>> 0;
+    const crc = crc32(dataBuf);
 
     // Local file header (30 bytes + filename)
     const local = Buffer.alloc(30);
